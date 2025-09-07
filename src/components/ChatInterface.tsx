@@ -2,9 +2,10 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { ChatMessage } from "./ChatMessage";
-import { ChatInput } from "./ChatInput";
+import { SecureChatInput } from "./SecureChatInput";
+import { ApiKeySetup } from "./ApiKeySetup";
 import { useToast } from "@/hooks/use-toast";
-import { MessageSquarePlus, Bot } from "lucide-react";
+import { MessageSquarePlus, Bot, Settings } from "lucide-react";
 
 interface Message {
   id: string;
@@ -13,8 +14,20 @@ interface Message {
   timestamp: Date;
 }
 
-const OPENROUTER_API_KEY = "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";
 const MODEL = "deepseek/deepseek-chat-v3.1:free";
+
+const getStoredApiKey = (): string | null => {
+  try {
+    const encrypted = localStorage.getItem("openrouter_api_key");
+    return encrypted ? atob(encrypted) : null;
+  } catch {
+    return null;
+  }
+};
+
+const clearStoredApiKey = () => {
+  localStorage.removeItem("openrouter_api_key");
+};
 
 export const ChatInterface = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -26,8 +39,19 @@ export const ChatInterface = () => {
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [showApiKeySetup, setShowApiKeySetup] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const storedKey = getStoredApiKey();
+    if (storedKey) {
+      setApiKey(storedKey);
+    } else {
+      setShowApiKeySetup(true);
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -49,6 +73,15 @@ export const ChatInterface = () => {
   };
 
   const sendMessage = async (content: string) => {
+    if (!apiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please set your API key to send messages.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       content,
@@ -69,7 +102,7 @@ export const ChatInterface = () => {
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": window.location.origin,
           "X-Title": "AI Chat Interface",
@@ -83,7 +116,14 @@ export const ChatInterface = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
+        // Handle different error types without exposing details
+        if (response.status === 401) {
+          throw new Error("Authentication failed. Please check your API key.");
+        } else if (response.status === 429) {
+          throw new Error("Rate limit exceeded. Please try again later.");
+        } else {
+          throw new Error("Service temporarily unavailable. Please try again.");
+        }
       }
 
       const data = await response.json();
@@ -98,16 +138,30 @@ export const ChatInterface = () => {
 
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
-      console.error("Error sending message:", error);
+      // Log error for debugging but don't expose details to user
+      const errorMessage = error instanceof Error ? error.message : "Failed to send message. Please try again.";
       toast({
         title: "Error",
-        description: "Failed to send message. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleApiKeySet = (newApiKey: string) => {
+    setApiKey(newApiKey);
+    setShowApiKeySetup(false);
+  };
+
+  const handleManageApiKey = () => {
+    setShowApiKeySetup(true);
+  };
+
+  if (showApiKeySetup) {
+    return <ApiKeySetup onApiKeySet={handleApiKeySet} existingApiKey={apiKey || undefined} />;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -117,26 +171,37 @@ export const ChatInterface = () => {
           <Bot className="h-6 w-6 text-primary" />
           <h1 className="text-xl font-semibold text-foreground">DeepSeek AI Chat</h1>
         </div>
-        <AlertDialog>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleManageApiKey}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Settings className="h-4 w-4 mr-2" />
+            API Key
+          </Button>
+          <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="outline" size="sm">
               <MessageSquarePlus className="h-4 w-4 mr-2" />
               New Chat
             </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Start New Chat</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will clear the current conversation. Are you sure you want to start a new chat?
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={handleNewChat}>Start New Chat</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Start New Chat</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will clear the current conversation. Are you sure you want to start a new chat?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleNewChat}>Start New Chat</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
 
       {/* Messages */}
@@ -162,7 +227,7 @@ export const ChatInterface = () => {
       </div>
 
       {/* Input */}
-      <ChatInput onSendMessage={sendMessage} isLoading={isLoading} />
+      <SecureChatInput onSendMessage={sendMessage} isLoading={isLoading} />
     </div>
   );
 };
